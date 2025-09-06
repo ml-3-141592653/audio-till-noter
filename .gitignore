@@ -179,3 +179,73 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+
+
+##Samt
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# --- Virtual environments ---
+.env
+.venv
+env/
+venv/
+ENV/
+*.env
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+*.ipynb~*
+
+# --- Logs & temp ---
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Data (skip raw/large files) ---
+data/
+*.csv
+*.tsv
+*.json
+*.xlsx
+*.h5
+*.pkl
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# --- Machine Learning ---
+runs/              # TensorBoard etc.
+wandb/             # Weights & Biases
+mlruns/            # MLflow
+outputs/
+checkpoints/
+models/
+
+# --- IDE & editors ---
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.user
+*.vs/
+
+# --- OS ---
+*.DS_Store
+ehthumbs.db
+Icon?
+desktop.ini
