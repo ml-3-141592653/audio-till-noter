@@ -1,0 +1,12 @@
+:root {
+    --max-width: 720px;
+}
+
+.container {
+    max-width: var(--max-width);
+}
+
+#score {
+    min-height: 200px;
+    /* plats så det inte hoppar */
+}

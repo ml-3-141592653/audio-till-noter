@@ -249,3 +249,6 @@ models/
 ehthumbs.db
 Icon?
 desktop.ini
+
+.DS_Store
+Thumbs.db
