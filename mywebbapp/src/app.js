@@ -106,8 +106,63 @@ els.btnStop.addEventListener("click", stopRecording);
 // TODO upload to backend
 els.btnTranscribe.addEventListener("click", async () => {
     if (!recordingBlob) return;
-    setStatus("Ready to upload (next step).");
+    setStatus("Uploading & transcribing…");
+
+    // 1) Packa blob i FormData (nyckeln MÅSTE heta 'file' för FastAPI UploadFile)
+    const fd = new FormData();
+    // välj valfritt filnamn; backend tittar främst på fältet 'file'
+    fd.append("file", recordingBlob, "take.webm");
+
+    try {
+        const resp = await fetch("http://localhost:8000/transcribe", {
+            method: "POST",
+            body: fd, // fetch sätter rätt multipart boundary automatiskt
+        });
+        if (!resp.ok) {
+            const t = await resp.text();
+            throw new Error(`HTTP ${resp.status}: ${t}`);
+        }
+        const data = await resp.json(); // { musicxml, midi_b64, meta }
+
+        // 2) Rendera MusicXML med OpenSheetMusicDisplay
+        const osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay("score", {
+            autoResize: true,
+            drawTitle: true,
+        });
+        await osmd.load(data.musicxml);
+        await osmd.render();
+
+        // 3) Skapa nedladdningslänkar för MIDI och MusicXML
+        const midiBytes = Uint8Array.from(atob(data.midi_b64), c => c.charCodeAt(0));
+        const midiBlob = new Blob([midiBytes], { type: "audio/midi" });
+        const xmlBlob = new Blob([data.musicxml], { type: "application/vnd.recordare.musicxml+xml" });
+
+        const dlWrap = document.createElement("div");
+        dlWrap.className = "mt-3 d-flex gap-2 flex-wrap";
+
+        const aMidi = document.createElement("a");
+        aMidi.href = URL.createObjectURL(midiBlob);
+        aMidi.download = "transcription.mid";
+        aMidi.className = "btn btn-outline-primary btn-sm";
+        aMidi.textContent = "Download MIDI";
+
+        const aXml = document.createElement("a");
+        aXml.href = URL.createObjectURL(xmlBlob);
+        aXml.download = "transcription.musicxml";
+        aXml.className = "btn btn-outline-secondary btn-sm";
+        aXml.textContent = "Download MusicXML";
+
+        dlWrap.appendChild(aMidi);
+        dlWrap.appendChild(aXml);
+        els.score.parentElement.appendChild(dlWrap);
+
+        setStatus(`Done. Duration ~${data.meta?.duration_sec ?? "?"}s`);
+    } catch (err) {
+        console.error(err);
+        setStatus("Transcription failed. Check console & backend logs.");
+    }
 });
+
 
 setButtons({ recording: false, hasAudio: false });
 console.info("Note: getUserMedia/MediaRecorder need a secure context (HTTPS or localhost).");
