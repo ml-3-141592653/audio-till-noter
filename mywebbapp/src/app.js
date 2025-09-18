@@ -15,8 +15,19 @@ let recordingBlob = null;
 let timerId = null;
 const MAX_SEC = 15;
 
-//helpers
+// UI Helper Functions
+/**
+ * Updates the status message display
+ * @param {string | null} msg - Status message to display
+ */
 function setStatus(msg) { els.status.textContent = msg ?? ""; }
+
+/**
+ * Updates button states based on recording status
+ * @param {Object} options
+ * @param {boolean} options.recording - Whether recording is in progress
+ * @param {boolean} options.hasAudio - Whether audio has been recorded
+ */
 function setButtons({ recording = false, hasAudio = false } = {}) {
     els.btnRecord.disabled = recording;
     els.btnStop.disabled = !recording;
@@ -44,10 +55,12 @@ function stopTimer() {
 
 async function startRecording() {
     try {
-        //>ask for mic:
+        // Request microphone access and initialize audio stream
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        // Define supported audio formats in order of preference
         const preferredTypes = [
-            "audio/webm;codecs=opus",
+            "audio/webm;codecs=opus",  // Best quality and compression
             "audio/webm",
             "audio/ogg;codecs=opus",
             "audio/ogg",
@@ -103,14 +116,14 @@ function stopRecording() {
 els.btnRecord.addEventListener("click", startRecording);
 els.btnStop.addEventListener("click", stopRecording);
 
-// TODO upload to backend
+// Handle audio transcription
 els.btnTranscribe.addEventListener("click", async () => {
     if (!recordingBlob) return;
     setStatus("Uploading & transcribing…");
 
-    // 1) Packa blob i FormData (nyckeln MÅSTE heta 'file' för FastAPI UploadFile)
+    // Prepare audio data for upload
+    // Note: FormData key must be 'file' to match FastAPI's UploadFile parameter
     const fd = new FormData();
-    // välj valfritt filnamn; backend tittar främst på fältet 'file'
     fd.append("file", recordingBlob, "take.webm");
 
     try {
@@ -120,11 +133,12 @@ els.btnTranscribe.addEventListener("click", async () => {
         });
         if (!resp.ok) {
             const t = await resp.text();
+            console.error('Server response:', t);
             throw new Error(`HTTP ${resp.status}: ${t}`);
         }
         const data = await resp.json(); // { musicxml, midi_b64, meta }
 
-        // 2) Rendera MusicXML med OpenSheetMusicDisplay
+        // Render the score using OpenSheetMusicDisplay
         const osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay("score", {
             autoResize: true,
             drawTitle: true,
@@ -132,7 +146,7 @@ els.btnTranscribe.addEventListener("click", async () => {
         await osmd.load(data.musicxml);
         await osmd.render();
 
-        // 3) Skapa nedladdningslänkar för MIDI och MusicXML
+        // Create download links for MIDI and MusicXML files
         const midiBytes = Uint8Array.from(atob(data.midi_b64), c => c.charCodeAt(0));
         const midiBlob = new Blob([midiBytes], { type: "audio/midi" });
         const xmlBlob = new Blob([data.musicxml], { type: "application/vnd.recordare.musicxml+xml" });

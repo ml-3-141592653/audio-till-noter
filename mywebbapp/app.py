@@ -12,10 +12,10 @@ from music21 import converter
 
 app = FastAPI()
 
-# CORS: lägg in din frontend-URL i allow_origins
+# Configure CORS middleware for frontend communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # byt till din deployade domän senare
+    allow_origins=["http://localhost:5173"],  # Update with production domain in deployment
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,10 +27,20 @@ class TranscribeResponse(BaseModel):
     meta: dict
 
 def _bytes_to_wav_if_needed(data: bytes, mime: str) -> bytes:
-    """Returnerar WAV PCM bytes oavsett om input var wav/webm/ogg."""
+    """
+    Converts audio data to WAV PCM format if not already in WAV format.
+    Supports various input formats including webm, ogg, and mp4.
+    
+    Args:
+        data: Raw audio bytes
+        mime: MIME type of the input audio
+        
+    Returns:
+        bytes: Audio data in WAV PCM format
+    """
     if mime in ("audio/wav", "audio/x-wav"):
         return data
-    # Försök dekoda med libsndfile via soundfile (fungerar för bl.a. ogg/opus)
+    # First attempt: Use libsndfile for formats like ogg/opus
     try:
         buf = io.BytesIO(data)
         audio, sr = sf.read(buf, dtype="float32", always_2d=False)
@@ -38,7 +48,7 @@ def _bytes_to_wav_if_needed(data: bytes, mime: str) -> bytes:
         sf.write(out, audio, sr, format="WAV", subtype="PCM_16")
         return out.getvalue()
     except Exception:
-        # Fallback: ffmpeg om installerat (bra för webm/mp4 på Safari/Chrome)
+        # Fallback: Use ffmpeg for formats like webm/mp4 (common in Safari/Chrome)
         try:
             with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp_in, \
                  tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
@@ -57,19 +67,26 @@ def _bytes_to_wav_if_needed(data: bytes, mime: str) -> bytes:
 
 @app.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe(file: UploadFile = File(...)):
-    if not file.content_type.startswith("audio/"):
-        raise HTTPException(400, "Expected audio/* upload")
+    try:
+        if not file.content_type.startswith("audio/"):
+            raise HTTPException(400, "Expected audio/* upload")
+        print(f"Processing file of type: {file.content_type}")
 
-    raw = await file.read()
-    wav_bytes = _bytes_to_wav_if_needed(raw, file.content_type)
+        raw = await file.read()
+        print("File read successfully, converting to WAV...")
+        wav_bytes = _bytes_to_wav_if_needed(raw, file.content_type)
+        print("Conversion to WAV completed")
+    except Exception as e:
+        print(f"Error processing audio: {str(e)}")
+        raise HTTPException(500, f"Error processing audio: {str(e)}")
 
-    # Skriv WAV till tempfil
+    # Create temporary directory for audio processing
     with tempfile.TemporaryDirectory() as td:
         wav_path = os.path.join(td, "input.wav")
         with open(wav_path, "wb") as f:
             f.write(wav_bytes)
 
-        # Kör Basic Pitch → skriver .mid i output-dir
+        # Run Basic Pitch ML model for audio-to-MIDI conversion
         out_dir = os.path.join(td, "out")
         os.makedirs(out_dir, exist_ok=True)
         predict_and_save(
@@ -82,20 +99,19 @@ async def transcribe(file: UploadFile = File(...)):
             model_or_model_path=ICASSP_2022_MODEL_PATH,
         )
 
-        # Hitta den genererade MIDI-filen
+        # Locate the generated MIDI file
         mid_path = None
         for name in os.listdir(out_dir):
-            if name.lower().endswith(".mid") or name.lower().endswith(".midi"):
+            if name.lower().endswith((".mid", ".midi")):
                 mid_path = os.path.join(out_dir, name)
                 break
         if not mid_path:
-            raise HTTPException(500, "No MIDI produced")
+            raise HTTPException(500, "No MIDI file was generated")
 
-        # Läs MIDI → MusicXML med music21
-        s = converter.parse(mid_path)  # music21.converter.parse
-        # Exportera till MusicXML som sträng
-        musicxml_str = s.write("musicxml")  # returns path; få sträng:
-        # read back as text
+        # Convert MIDI to MusicXML using music21
+        s = converter.parse(mid_path)
+        # Export to MusicXML and read as string
+        musicxml_str = s.write("musicxml")  # Returns file path
         with open(musicxml_str, "r", encoding="utf-8") as f:
             xml_text = f.read()
 
