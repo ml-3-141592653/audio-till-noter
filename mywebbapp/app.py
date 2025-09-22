@@ -10,12 +10,15 @@ from basic_pitch import ICASSP_2022_MODEL_PATH
 import pretty_midi
 from music21 import converter
 
-app = FastAPI()
+app = FastAPI(title="Audio to Notes API")
+
+# Get allowed origins from environment variable or use default for local development
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 
 # Configure CORS middleware for frontend communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Update with production domain in deployment
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -25,6 +28,22 @@ class TranscribeResponse(BaseModel):
     musicxml: str
     midi_b64: str
     meta: dict
+
+def _get_ffmpeg_path():
+    """Get the ffmpeg executable path."""
+    # Check common installation locations
+    possible_paths = [
+        "ffmpeg",  # If in PATH
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+    ]
+    for path in possible_paths:
+        try:
+            subprocess.run([path, "-version"], capture_output=True)
+            return path
+        except Exception:
+            continue
+    return None
 
 def _bytes_to_wav_if_needed(data: bytes, mime: str) -> bytes:
     """
@@ -38,44 +57,75 @@ def _bytes_to_wav_if_needed(data: bytes, mime: str) -> bytes:
     Returns:
         bytes: Audio data in WAV PCM format
     """
+    print(f"Converting audio from {mime} to WAV")
+    
     if mime in ("audio/wav", "audio/x-wav"):
         return data
-    # First attempt: Use libsndfile for formats like ogg/opus
+
+    # For WebM (most common from browser recording), try ffmpeg first
+    if mime in ("audio/webm", "audio/webm;codecs=opus"):
+        ffmpeg_path = _get_ffmpeg_path()
+        if not ffmpeg_path:
+            raise RuntimeError("ffmpeg not found. Please install ffmpeg to handle WebM audio.")
+            
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp_in, \
+                 tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
+                tmp_in.write(data)
+                tmp_in.flush()
+                
+                cmd = [ffmpeg_path, "-y", "-i", tmp_in.name, "-ac", "1", "-ar", "44100", tmp_out.name]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                
+                if result.returncode != 0:
+                    print(f"ffmpeg stderr: {result.stderr}")
+                    raise RuntimeError(f"ffmpeg conversion failed: {result.stderr}")
+                
+                with open(tmp_out.name, "rb") as f:
+                    wav_bytes = f.read()
+                return wav_bytes
+        except Exception as e:
+            raise RuntimeError(f"Failed to convert WebM: {str(e)}")
+            
+    # For other formats, try soundfile first
     try:
         buf = io.BytesIO(data)
         audio, sr = sf.read(buf, dtype="float32", always_2d=False)
         out = io.BytesIO()
         sf.write(out, audio, sr, format="WAV", subtype="PCM_16")
         return out.getvalue()
-    except Exception:
-        # Fallback: Use ffmpeg for formats like webm/mp4 (common in Safari/Chrome)
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp_in, \
-                 tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_out:
-                tmp_in.write(data); tmp_in.flush()
-                cmd = ["ffmpeg", "-y", "-i", tmp_in.name, "-ac", "1", "-ar", "44100", tmp_out.name]
-                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                with open(tmp_out.name, "rb") as f:
-                    wav_bytes = f.read()
-                return wav_bytes
-        finally:
-            for p in [locals().get("tmp_in"), locals().get("tmp_out")]:
-                try:
-                    if p: os.unlink(p.name)
-                except Exception:
-                    pass
+    except Exception as e:
+        print(f"soundfile conversion failed: {str(e)}")
+        raise RuntimeError(f"Unsupported audio format {mime}")
+    finally:
+        for p in [locals().get("tmp_in"), locals().get("tmp_out")]:
+            try:
+                if p: os.unlink(p.name)
+            except Exception:
+                pass
 
 @app.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe(file: UploadFile = File(...)):
+    """
+    Transcribe audio to music notation.
+    Supports WebM (from browser recording), WAV, OGG, and other audio formats.
+    """
     try:
         if not file.content_type.startswith("audio/"):
             raise HTTPException(400, "Expected audio/* upload")
         print(f"Processing file of type: {file.content_type}")
 
         raw = await file.read()
-        print("File read successfully, converting to WAV...")
-        wav_bytes = _bytes_to_wav_if_needed(raw, file.content_type)
-        print("Conversion to WAV completed")
+        print(f"File read successfully ({len(raw)} bytes), converting to WAV...")
+        
+        try:
+            wav_bytes = _bytes_to_wav_if_needed(raw, file.content_type)
+            print(f"Conversion to WAV completed ({len(wav_bytes)} bytes)")
+        except Exception as e:
+            print(f"Audio conversion error: {str(e)}")
+            if "ffmpeg not found" in str(e):
+                raise HTTPException(500, "Server configuration error: ffmpeg is required but not installed. Please install ffmpeg.")
+            raise HTTPException(500, f"Error converting audio: {str(e)}")
     except Exception as e:
         print(f"Error processing audio: {str(e)}")
         raise HTTPException(500, f"Error processing audio: {str(e)}")
